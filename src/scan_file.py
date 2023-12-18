@@ -1,103 +1,118 @@
 #!/usr/bin/env python3
 import re
+import logging
 from link import scan_links
+import threading
+import concurrent.futures
 import os
 from sys import argv
 from sys import exit
+logging.basicConfig(format='%(levelname)s:%(message)s', level=os.environ.get("LOGLEVEL", "INFO"))
 
-args = argv
-if "--local-test" in args:  # for local testing
-   # directories = ["./", "./pythonfetch", "./bfetch/", "./kids.cache/", "awesome-python"]
-    directories = '.'
-#    directories = ["awesome-python"]
-    verbose = True
-    whitelist_links = ["https://img.shields.io/badge/style-black-black", "http://github.com/0k/%%name%%"]
-    whitelist_files=["LICENSE.md", "README.md"]
-    for i, file in enumerate(whitelist_files):
-        if not file.startswith("./"):
-            whitelist_files[i] = f"./{file}"
-            print(f"File '{file}' has been converted to relative filepath '{whitelist_files[i]}'")
+try:
 
-else:
-    try:
-        verbose = os.getenv("INPUT_VERBOSE")
-        whitelist_links = os.getenv("INPUT_WHITELIST_LINKS").split(",")
-        whitelist_files = os.getenv("INPUT_WHITELIST_FILES").split(",")
-        directories = os.getenv("INPUT_DIRS").split(",")  # defaults to '.' from the action.yml
-        if verbose == "false":
-            verbose = False
-            print("Verbose is disabled")
-        elif verbose == "true":
-            verbose = True
-            print("Verbose is enabled")
-        for i, file in enumerate(whitelist_files):
-            if not file.startswith("./"):
-                whitelist_files[i] = f"./{file}"
-                print(f"File '{file}' has been converted to relative filepath '{whitelist_files[i]}'")
-    except:
-        print("Error loading env variables, please check your .github/workflows workflow")
-        exit(1)
+    ignored_links = ["https://example.com", "http://example.com", "http://localhost", "http://localhost"]
+
+    # this link is working, its just the longest web page loading you can experience in this universe
+    ignored_links.append("http://unicode.org/emoji/charts/full-emoji-list.html")
+
+    if os.getenv("INPUT_IGNORED_LINKS"):
+        user_ignored_links = os.getenv("INPUT_IGNORED_LINKS").split(",")
+        for link in user_ignored_links:
+            ignored_links.append(link)
+    ignored_files = []
+    if os.getenv("INPUT_IGNORED_FILES"):
+        ignored_files = os.getenv("INPUT_IGNORED_FILES").split(",")
+
+    ignored_dirs = [ "build", ".git", ".cache"]
+    if os.getenv("INPUT_IGNORED_DIRS"):
+        user_ignored_dirs = os.getenv("INPUT_IGNORED_DIRS").split(",")
+        for d in user_ignored_dirs:
+            ignored_dirs.append(d)
+except:
+    logging.info("Error loading env variables, please check your .github/workflows workflow")
+    exit(1)
 
 
 pattern = re.compile(r"(http|https):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-])")
 links = []
-default_link_exclusion = ["https://example.com", "http://example.com", "http://localhost", "http://localhost"]
+
+# add recursivly all directories in current path
+def find_all_subdirs(dir):
+    subdirs = []
+    for f in os.scandir(dir):
+        if f.is_dir():
+            if f.name not in ignored_dirs:
+                subdirs.append(f.path)
+    for dir in list(subdirs):
+        sf = find_all_subdirs(dir)
+        subdirs.extend(sf)
+    return subdirs
+
+directories = ["."]
+subdirs = find_all_subdirs(directories[0])
+[directories.append(subdir) for subdir in subdirs]
+logging.info(f"directories: {directories}")
+
 
 # loop through the directories, e.g. [".", "./src", "./doc"]
-for directory in directories:
+def process_directory(directory):
+    directory = directory.strip()
+    logging.debug(f"Processing directory {directory}")
     if directory != "." and not directory.startswith("./"):
         old_directory = directory
         directory = f"./{directory}"
-        print(f"Directory '{old_directory}' converted to relative filepath '{directory}'")
+        logging.debug(f"Directory '{old_directory}' converted to relative filepath '{directory}'")
     try:
         scan = os.scandir(directory)
     except FileNotFoundError:
-        print(f"Directory '{directory}' not found, please check the file path (only use relative paths) and spelling")
+        logging.info(f"Directory '{directory}' not found, please check the file path (only use relative paths) and spelling")
         exit(78)
     for file_object in scan:
         file = file_object.path
-        if file_object.is_file() and not file.startswith("./."):  # filter out dirs like .git
-            if file in whitelist_files:
-                print(f"{file} skipped due to whitelist")
+        if file_object.is_file():  # filter out dirs like .git
+            if file in ignored_files:
+                logging.info(f"{file} skipped due to ignored files")
                 # skip the file
                 continue
-            if verbose:
-                print(f"Scanning {file} file")
+            logging.debug(f"Scanning {file} file")
             # scan file
             try:
                 for i, line in enumerate(open(file)):
                     for match in re.finditer(pattern, line):
                         try:
                             re_match = match.group()
-                            if verbose:
-                                pass
-        #                        print(f"Link found on line {i+1}: {re_match}")
+                            logging.debug(f"Link found on line {i+1}: {re_match}")
                         except Exception as e:
-                            print(e)
+                            logging.info(e)
                         else:
-                            ignore = False
-                            for ignore_link in default_link_exclusion:
+                            for ignore_link in ignored_links:
                                 if ignore_link in re_match:
-                                   print(f"Link ignored (automatically): {re_match}")
-                                   ignore = True
-                                   break
-                            if ignore:  # link should be automatically ignored
-                                continue  # skip to the next link
-                            for ignore_link in whitelist_links:
-                                if ignore_link in re_match:
-                                    print(f"Link ignored (whitelist): {re_match}")
+                                    logging.info(f"Link ignored : {re_match}")
                                     break
-                            else:  # if link is not whitelisted or ignored
-                                links.append((file, i+1, re_match))
-                                if verbose == True:
-      #                              print('Link added for scanning %s' % (match.group()))
-                                    pass
+                            else:  # if link is not ignored
+                                links.append(re_match)
+                                logging.debug('Link added for scanning %s' % (match.group()))
             except UnicodeDecodeError:  # if the file contents can't be read
-                print(f"'{file}' has been skipped as it is not readable!")
+                logging.debug(f"'{file}' has been skipped as it is not readable!")
                 continue  # skip to next file
 
-print("\n\nLink check starting:\n")
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    executor.map(process_directory, directories)
+
+
+unique_links = []
+
+for link in links:
+    if link not in unique_links:
+        unique_links.append(link)
+
+
+logging.info("\n\nLink check starting:\n")
+logging.info(f"Total number of links to check {len(links)}")
+logging.info(f"Total number of unique links to check {len(unique_links)}")
 try:
-    scan_links(links, verbose=True)
+    scan_links(unique_links)
 except Exception as e:
-    print(e)
+    logging.info(e)

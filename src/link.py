@@ -1,87 +1,104 @@
+import logging
 import requests
-from requests.adapters import HTTPAdapter
+import re
+import threading
+import concurrent.futures
 from sys import exit
-import os
+from os import environ
+
+
+
+bad_links = []
+warning_links = []
+good_link_count = 0
+thread_local = threading.local()
+
+
 
 def write_summary(payload):
     with open("tmp.txt", "a") as file:
         file.write(f"{payload}\n")
 
-def scan_links(links, verbose=False):
-    write_summary("# :link: Summary")
-    bad_links = []
-    warning_links = []
-    good_link_count = 0
-    for file, line, link in links:
+
+def get_session():
+    if not hasattr(thread_local, "session"):
+        thread_local.session = requests.Session()
+    return thread_local.session
+
+def scan_link(link):
+    logging.debug(f"Checking link {link}")
+    global good_link_count
+    try:
+        session = get_session()
+        if "api.github.com" in link:
+            return
         try:
-            s = requests.Session()
-            s.mount(link, HTTPAdapter(max_retries=5))
-            req = s.get(link)
-            status = req.status_code
+            with session.get(link, timeout=15) as response:
+                response = response.status_code
         except requests.exceptions.SSLError:
-            print(f"---> SSL certificate error for link: {link}")
-            bad_links.append((file, line, link))
+            logging.debug(f"---> SSL certificate error for link: {link}")
+            bad_links.append(link)
+        except requests.exceptions.ReadTimeout:
+            logging.debug(f"---> Connection timed out for link: {link}")
+            bad_links.append(link)
         except requests.exceptions.RequestException as err:
             if "Max retries exceeded with url" in str(err):
-                print(f"Link connection failed, max retries reached: {link}")
-                bad_links.append((file, line, link))
+                logging.debug(f"Link connection failed, max retries reached: {link}")
+                bad_links.append(link)
             else:
-                print(f"---> Connection error: {err}")
-                bad_links.append((file, line, link))
+                logging.debug(f"---> Connection error: {err} for link: {link}")
+                bad_links.append(link)
         except Exception as err:
-            print(f"---> Unexpected exception occurred while making request: {err}")
+            logging.debug(f"---> Unexpected exception occurred while making request: {err} for link: {link}")
         else:
-            if status == 403:
-                print(f"--> Link validity unkwown with 403 Forbidden return code")
-                warning_links.append((file, line, link))
-            elif status == 406:
-                print(f"--> Link validity unkwown with 406 Not Acceptable return code")
-                warning_links.append((file, line, link))
-            elif 561 >= status >= 400:
-                print(f"----> Error with status code {status}")
-                bad_links.append((file, line, link))
-            elif status >= 300:  # between 300-400 HTTP REDIRECT
-                print(f"--> Link redirecting with status code {status}")
-                warning_links.append((file, line, link))
-            elif status < 400:
-                print(f"Link valid with status code {status}")
+            if response == 403:
+                logging.debug(f"--> Link validity unkwown with 403 Forbidden return code for link: {link}")
+                warning_links.append(link)
+            elif response == 406:
+                logging.debug(f"--> Link validity unkwown with 406 Not Acceptable return code for link: {link}")
+                warning_links.append(link)
+            elif response == 504:
+                logging.debug(f"----> Error with status code 504 Gateway Timeout for link: {link}")
+                bad_links.append(link)
+            elif 561 >= response >= 400:
+                logging.debug(f"----> Error with status code {response} for link: {link}")
+                bad_links.append(link)
+            elif response >= 300:  # between 300-400 HTTP REDIRECT
+                logging.debug(f"--> Link redirecting with status code {response} for link: {link}")
+                warning_links.append(link)
+            elif response < 400:
+                logging.debug(f"Link valid with status code {response}")
                 good_link_count += 1
-            elif status == 999:
-                print("--> Linkedin specific return code 999")
-                warning_links.append((file, line, link))
+            elif response == 999:
+                logging.debug("--> Linkedin specific return code 999")
+                warning_links.append(link)
             else:
-                print(f"--> Unknown return code {status}")
-                warning_links.append((file, line, link))
-    bad_link_count = 0
-    warn_link_count = 0
+                logging.debug(f"--> Unknown return code {response} for link: {link}")
+                warning_links.append(link)
+    except Exception as e:
+        logging.debug(e)
+
+
+def all_sites(sites):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        executor.map(scan_link, sites)
+
+
+def scan_links(unique_links):
+    all_sites(unique_links)
+    write_summary("# :link: Summary")
+    write_summary(f":white_check_mark: Good links: {good_link_count}")
+    write_summary(f":warning: Warning links: {len(warning_links)}")
+    write_summary(f":no_entry_sign: Bad links: {len(bad_links)}")
+    if warning_links:
+        logging.debug("\n==== Links with non-definitive status codes ====")
+        for link in warning_links:
+            logging.info(f"Non-definitive status code: {link}")
     if bad_links:
-        print("Test failed")
-        if warning_links:
-            print("\n==== Links with non-definitive status codes ====")
-            for file, line, link in warning_links:
-                print(f"In {file} on line {line}, link: {link}")
-                warn_link_count +=1
-            print("Links that you have verified are OK can be whitelisted in the workflow file")
-        print("\n==== Failed links ====")
-        for file, line, link in bad_links:
-            print(f"In {file} on line {line}, link: {link}")
-            bad_link_count += 1
-        write_summary(f":white_check_mark: Good links: {good_link_count}")
-        write_summary(f":warning: Warning links: {warn_link_count}")
-        write_summary(f":no_entry_sign: Bad links: {bad_link_count}")
+        logging.info("Test failed")
+        logging.info("\n==== Failed links ====")
+        for link in bad_links:
+            logging.info(f"FAILED: {link}")
         exit(1)
-    elif warning_links:
-        print("\n==== Links with non-definitive status codes ====")
-        for file, line, link in warning_links:
-            print(f"In {file} on line {line}, link: {link}")
-        print("Links that you have verified are OK can be whitelisted in the workflow file")
-        print("Otherwise, all links correct - test passed")
-        write_summary(f":white_check_mark: Good links: {good_link_count}")
-        write_summary(f":warning: Warning links: {warn_link_count}")
-        write_summary(f":no_entry_sign: Bad links: {bad_link_count}")
     else:
-        print("All links correct - test passed")
-        write_summary(f":white_check_mark: Good links: {good_link_count}")
-        write_summary(f":warning: Warning links: {warn_link_count}")
-        write_summary(f":no_entry_sign: Bad links: {bad_link_count}")
-        exit(0)
+        logging.info("All links correct - test passed")

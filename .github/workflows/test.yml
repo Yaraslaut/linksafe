@@ -7,8 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run the action
-        uses: TechWiz-3/linksafe@main
+        uses: Yaraslaut/linksafe@main
         with:
-          dirs: ".,test,src/"
-          whitelist_files: "test.txt"
-          verbose: true
+          ignored_links: "https://www.iamkneel.tk/blog"
+          ignored_files: "./src/scan_file.py"
+          ignored_dirs: "test"
