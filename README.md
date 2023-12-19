@@ -23,7 +23,7 @@ jobs:
 ```
 
 ## Info
-`.git` `build` `.cache` directories are automatically ignored. 
+`.git` `build` `.cache` `.github` directories are automatically ignored. 
 `https://example.com`,`http://localhost` and `http://unicode.org/emoji/charts/full-emoji-list.html` are automatically ignored.
 
 All directories will be scanned, if you want to ommit some put them in `ignored_dirs` option.

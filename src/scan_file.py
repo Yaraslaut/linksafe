@@ -17,16 +17,16 @@ try:
     ignored_links.append("http://unicode.org/emoji/charts/full-emoji-list.html")
 
     if os.getenv("INPUT_IGNORED_LINKS"):
-        user_ignored_links = os.getenv("INPUT_IGNORED_LINKS").split(",")
+        user_ignored_links = os.getenv("INPUT_IGNORED_LINKS").replace("\n"," ").split(",")
         for link in user_ignored_links:
-            ignored_links.append(link)
+            ignored_links.append(link.strip())
     ignored_files = []
     if os.getenv("INPUT_IGNORED_FILES"):
-        ignored_files = os.getenv("INPUT_IGNORED_FILES").split(",")
+        ignored_files = os.getenv("INPUT_IGNORED_FILES").replace("\n"," ").split(",")
 
-    ignored_dirs = [ "build", ".git", ".cache"]
+    ignored_dirs = [ "build", ".git", ".cache", ".github"]
     if os.getenv("INPUT_IGNORED_DIRS"):
-        user_ignored_dirs = os.getenv("INPUT_IGNORED_DIRS").split(",")
+        user_ignored_dirs = os.getenv("INPUT_IGNORED_DIRS").replace("\n"," ").split(",")
         for d in user_ignored_dirs:
             ignored_dirs.append(d)
 except:
@@ -53,6 +53,9 @@ directories = ["."]
 subdirs = find_all_subdirs(directories[0])
 [directories.append(subdir) for subdir in subdirs]
 logging.info(f"directories: {directories}")
+logging.info(f"list of ignored links: {ignored_links}")
+logging.info(f"list of ignored dirs:  {ignored_dirs}")
+logging.info(f"list of ignored files: {ignored_files}")
 
 
 # loop through the directories, e.g. [".", "./src", "./doc"]
@@ -92,7 +95,7 @@ def process_directory(directory):
                                     break
                             else:  # if link is not ignored
                                 links.append(re_match)
-                                logging.debug('Link added for scanning %s' % (match.group()))
+                                logging.debug(f"Link from {file}:{i+1} added for scanning {match.group()}" )
             except UnicodeDecodeError:  # if the file contents can't be read
                 logging.debug(f"'{file}' has been skipped as it is not readable!")
                 continue  # skip to next file
